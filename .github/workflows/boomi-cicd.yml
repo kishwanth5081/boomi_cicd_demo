@@ -1,1 +1,468 @@
-
+# ============================================================
+# BOOMI SAVE -> GITHUB ACTIONS WATCHER
+# ============================================================
+ 
+$PollSeconds = 2
+ 
+ 
+# ============================================================
+# BOOMI CONFIGURATION
+# ============================================================
+ 
+$BoomiApiBaseUrl = "https://api.boomi.com"
+ 
+$BoomiAccountId = "trainingkishwanthaderu-KT9BA9"
+ 
+$BoomiComponentId = "1e74adc2-7144-4c36-98d5-56fb1f487a56"
+ 
+$ExpectedProcessName = "CICD_Demo_Process"
+ 
+ 
+# ============================================================
+# GITHUB CONFIGURATION
+# ============================================================
+ 
+$GitHubOwner = "Kishwanth5081"
+ 
+$GitHubRepository = "boomi_cicd_demo"
+ 
+$GitHubEventType = "boomi_component_saved"
+ 
+ 
+# ============================================================
+# SECURESTRING CONVERSION
+# ============================================================
+ 
+function Convert-SecureStringToPlainText {
+ 
+    param(
+        [System.Security.SecureString]$SecureValue
+    )
+ 
+    $Pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR(
+        $SecureValue
+    )
+ 
+    try {
+ 
+        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR(
+            $Pointer
+        )
+ 
+    }
+    finally {
+ 
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR(
+            $Pointer
+        )
+ 
+    }
+ 
+}
+ 
+ 
+# ============================================================
+# REQUEST CREDENTIALS
+# ============================================================
+ 
+Write-Host ""
+Write-Host "==============================================" -ForegroundColor Cyan
+Write-Host " BOOMI SAVE -> GITHUB CI/CD WATCHER" -ForegroundColor Cyan
+Write-Host "==============================================" -ForegroundColor Cyan
+Write-Host ""
+ 
+$BoomiUsername = Read-Host "Enter your Boomi username"
+ 
+$BoomiTokenSecure = Read-Host `
+    "Enter your Boomi Platform API Token" `
+    -AsSecureString
+ 
+$GitHubTokenSecure = Read-Host `
+    "Enter your GitHub Boomi_Save_Trigger token" `
+    -AsSecureString
+ 
+ 
+$BoomiApiToken = Convert-SecureStringToPlainText `
+    $BoomiTokenSecure
+ 
+$GitHubToken = Convert-SecureStringToPlainText `
+    $GitHubTokenSecure
+ 
+ 
+# ============================================================
+# BOOMI BASIC AUTH HEADER
+# ============================================================
+ 
+$BoomiAuthUsername = "BOOMI_TOKEN.$BoomiUsername"
+ 
+$BoomiCredentialPair = "${BoomiAuthUsername}:$BoomiApiToken"
+ 
+$BoomiCredentialBytes = [Text.Encoding]::UTF8.GetBytes(
+    $BoomiCredentialPair
+)
+ 
+$BoomiCredentialBase64 = [Convert]::ToBase64String(
+    $BoomiCredentialBytes
+)
+ 
+ 
+$BoomiHeaders = @{
+ 
+    Authorization = "Basic $BoomiCredentialBase64"
+ 
+    Accept = "application/json"
+ 
+}
+ 
+ 
+# ============================================================
+# URLS
+# ============================================================
+ 
+$BoomiComponentUrl = `
+    "$BoomiApiBaseUrl/api/rest/v1/$BoomiAccountId/ComponentMetadata/$BoomiComponentId"
+ 
+ 
+$GitHubDispatchUrl = `
+    "https://api.github.com/repos/$GitHubOwner/$GitHubRepository/dispatches"
+ 
+ 
+# ============================================================
+# GITHUB HEADERS
+# ============================================================
+ 
+$GitHubHeaders = @{
+ 
+    Authorization = "Bearer $GitHubToken"
+ 
+    Accept = "application/vnd.github+json"
+ 
+    "X-GitHub-Api-Version" = "2026-03-10"
+ 
+    "User-Agent" = "Boomi-Save-CICD-Watcher"
+ 
+}
+ 
+ 
+# ============================================================
+# GET BOOMI COMPONENT METADATA
+# ============================================================
+ 
+function Get-BoomiComponentMetadata {
+ 
+    $Response = Invoke-RestMethod `
+        -Uri $BoomiComponentUrl `
+        -Method Get `
+        -Headers $BoomiHeaders
+ 
+    return $Response
+ 
+}
+ 
+ 
+# ============================================================
+# TRIGGER GITHUB
+# ============================================================
+ 
+function Send-GitHubDispatch {
+ 
+    param(
+ 
+        [string]$PreviousRevision,
+ 
+        [string]$NewRevision
+ 
+    )
+ 
+ 
+    $Payload = @{
+ 
+        event_type = $GitHubEventType
+ 
+        client_payload = @{
+ 
+            component_id = $BoomiComponentId
+ 
+            process_name = $ExpectedProcessName
+ 
+            previous_revision = $PreviousRevision
+ 
+            new_revision = $NewRevision
+ 
+        }
+ 
+    } | ConvertTo-Json -Depth 10
+ 
+ 
+    Write-Host ""
+    Write-Host "Sending trigger to GitHub..." `
+        -ForegroundColor Yellow
+ 
+ 
+    $Response = Invoke-WebRequest `
+        -Uri $GitHubDispatchUrl `
+        -Method Post `
+        -Headers $GitHubHeaders `
+        -ContentType "application/json" `
+        -Body $Payload `
+        -UseBasicParsing
+ 
+ 
+    if ($Response.StatusCode -eq 204) {
+ 
+        Write-Host ""
+ 
+        Write-Host "==============================================" `
+            -ForegroundColor Green
+ 
+        Write-Host " GITHUB CI/CD TRIGGER ACCEPTED" `
+            -ForegroundColor Green
+ 
+        Write-Host "==============================================" `
+            -ForegroundColor Green
+ 
+        Write-Host "Process           : $ExpectedProcessName"
+ 
+        Write-Host "Previous Revision : $PreviousRevision"
+ 
+        Write-Host "New Revision      : $NewRevision"
+ 
+        Write-Host "GitHub HTTP       : 204"
+ 
+        Write-Host "==============================================" `
+            -ForegroundColor Green
+ 
+        return $true
+ 
+    }
+ 
+ 
+    Write-Host ""
+    Write-Host "Unexpected GitHub response." `
+        -ForegroundColor Red
+ 
+    Write-Host "HTTP: $($Response.StatusCode)"
+ 
+    return $false
+ 
+}
+ 
+ 
+# ============================================================
+# INITIAL CONNECTION TEST
+# ============================================================
+ 
+Write-Host ""
+Write-Host "Connecting to Boomi..." `
+    -ForegroundColor Yellow
+ 
+ 
+try {
+ 
+    $InitialMetadata = Get-BoomiComponentMetadata
+ 
+}
+catch {
+ 
+    Write-Host ""
+    Write-Host "ERROR: Unable to connect to Boomi." `
+        -ForegroundColor Red
+ 
+    Write-Host $_.Exception.Message
+ 
+    exit 1
+ 
+}
+ 
+ 
+$InitialProcessName = [string]$InitialMetadata.name
+ 
+$LastRevision = [string]$InitialMetadata.version
+ 
+ 
+if ($InitialProcessName -ne $ExpectedProcessName) {
+ 
+    Write-Host ""
+    Write-Host "ERROR: Component ID belongs to another process." `
+        -ForegroundColor Red
+ 
+    Write-Host "Expected: $ExpectedProcessName"
+ 
+    Write-Host "Actual  : $InitialProcessName"
+ 
+    exit 1
+ 
+}
+ 
+ 
+if ([string]::IsNullOrWhiteSpace($LastRevision)) {
+ 
+    Write-Host ""
+    Write-Host "ERROR: Boomi revision was empty." `
+        -ForegroundColor Red
+ 
+    exit 1
+ 
+}
+ 
+ 
+Write-Host ""
+Write-Host "==============================================" `
+    -ForegroundColor Green
+ 
+Write-Host " WATCHER STARTED SUCCESSFULLY" `
+    -ForegroundColor Green
+ 
+Write-Host "==============================================" `
+    -ForegroundColor Green
+ 
+Write-Host "Process       : $InitialProcessName"
+ 
+Write-Host "Component ID  : $BoomiComponentId"
+ 
+Write-Host "Revision      : $LastRevision"
+ 
+Write-Host "Poll Interval : $PollSeconds seconds"
+ 
+Write-Host "==============================================" `
+    -ForegroundColor Green
+ 
+Write-Host ""
+ 
+Write-Host "Now make a change in Boomi and click Save." `
+    -ForegroundColor Cyan
+ 
+Write-Host ""
+ 
+Write-Host "Do NOT manually run GitHub Actions." `
+    -ForegroundColor Cyan
+ 
+Write-Host ""
+ 
+Write-Host "Press CTRL+C when you want to stop the watcher."
+ 
+ 
+# ============================================================
+# WATCH LOOP
+# ============================================================
+ 
+while ($true) {
+ 
+    Start-Sleep -Seconds $PollSeconds
+ 
+ 
+    try {
+ 
+        $Metadata = Get-BoomiComponentMetadata
+ 
+ 
+        $CurrentProcessName = [string]$Metadata.name
+ 
+        $CurrentRevision = [string]$Metadata.version
+ 
+ 
+        if ($CurrentProcessName -ne $ExpectedProcessName) {
+ 
+            Write-Host ""
+            Write-Host "WARNING: Unexpected process returned." `
+                -ForegroundColor Yellow
+ 
+            Write-Host "Expected: $ExpectedProcessName"
+ 
+            Write-Host "Actual  : $CurrentProcessName"
+ 
+            continue
+ 
+        }
+ 
+ 
+        if ([string]::IsNullOrWhiteSpace($CurrentRevision)) {
+ 
+            Write-Host ""
+            Write-Host "WARNING: Current revision is blank." `
+                -ForegroundColor Yellow
+ 
+            continue
+ 
+        }
+ 
+ 
+        if ($CurrentRevision -ne $LastRevision) {
+ 
+            Write-Host ""
+            Write-Host "==============================================" `
+                -ForegroundColor Yellow
+ 
+            Write-Host " BOOMI PROCESS SAVE DETECTED" `
+                -ForegroundColor Yellow
+ 
+            Write-Host "==============================================" `
+                -ForegroundColor Yellow
+ 
+            Write-Host "Process           : $ExpectedProcessName"
+ 
+            Write-Host "Previous Revision : $LastRevision"
+ 
+            Write-Host "New Revision      : $CurrentRevision"
+ 
+            Write-Host "Modified By       : $($Metadata.modifiedBy)"
+ 
+            Write-Host "Modified Date     : $($Metadata.modifiedDate)"
+ 
+            Write-Host "==============================================" `
+                -ForegroundColor Yellow
+ 
+ 
+            try {
+ 
+                $Triggered = Send-GitHubDispatch `
+                    -PreviousRevision $LastRevision `
+                    -NewRevision $CurrentRevision
+ 
+ 
+                if ($Triggered) {
+ 
+                    $LastRevision = $CurrentRevision
+ 
+                    Write-Host ""
+ 
+                    Write-Host "Watching for next Boomi Save..." `
+                        -ForegroundColor Cyan
+ 
+                }
+ 
+            }
+            catch {
+ 
+                Write-Host ""
+ 
+                Write-Host "ERROR: GitHub trigger failed." `
+                    -ForegroundColor Red
+ 
+                Write-Host $_.Exception.Message
+ 
+                Write-Host ""
+ 
+                Write-Host "The new revision was NOT marked as handled."
+ 
+                Write-Host "Watcher will retry automatically."
+ 
+            }
+ 
+        }
+ 
+    }
+    catch {
+ 
+        Write-Host ""
+ 
+        Write-Host "WARNING: Boomi revision check failed." `
+            -ForegroundColor Yellow
+ 
+        Write-Host $_.Exception.Message
+ 
+        Write-Host "Retrying in $PollSeconds seconds..."
+ 
+    }
+ 
+}
